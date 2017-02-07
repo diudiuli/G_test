@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <string>
 #include <opencv2/opencv.hpp>
-#include <opencv2/nonfree/features2d.hpp>
+#include <opencv2/features2d.hpp>
 #include </usr/local/cuda-8.0/include/cuda.h>
 #include </usr/local/cuda-8.0/include/cufft.h>
 #include </usr/local/cuda-8.0/include/cufft.h>
@@ -27,6 +27,7 @@
 #define SPEED_MODE 1
 #define RECORD 0
 #define CROP_PARAM 2.2
+#define SEARCH_LEN 50
 using namespace std;
 using namespace cv;
 
@@ -35,7 +36,6 @@ Mat img, img_cmp, gray_img, gray_img_cmp;
 Mat templs[TMP_NUM];
 Mat img_vec[TMP_NUM];
 Point kpt_vec[TMP_NUM];
-Point ext_vec[TMP_NUM];
 vector<Point2f > corners;
 int dis[TMP_NUM];
 
@@ -94,7 +94,7 @@ __global__ void conv2d(float* A, float* B, const int x_size, const int y_size, c
             img_res = 0.0;
             for( int idx_y=0; idx_y<KERNEL_WIDTH; idx_y++ )
             {
-                for( int idx_x=0; idx_x<SPEED_MODE; idx_x++ )
+                for( int idx_x=0; idx_x<ACCURATE_MODE; idx_x++ )
                 {
                     
                     templ_res += pow(deviceKernel[bz*KERNEL_WIDTH*KERNEL_WIDTH+idx_y*KERNEL_WIDTH+idx_x],2);
@@ -190,10 +190,10 @@ int cuda_tp_img(int template_num)
     cudaMemcpy( gpu_out, device_img_output, img_size*sizeof(float)*template_num, cudaMemcpyDeviceToHost);
     //Selecting peak value of each image's convolution result and label out on the image.
     float res = 0;
-    int y_pos;
+    int x_pos;
     for(int idx=0; idx<template_num; idx++)
     {
-        y_pos = 0;
+        x_pos = 0;
         res = 0;
         for(int y=0; y<y_size; y++)
         {
@@ -203,14 +203,17 @@ int cuda_tp_img(int template_num)
                 if(gpu_out[idx*img_size+y*x_size+x]>res)
                 {
                     res = gpu_out[idx*img_size+y*x_size+x];
-                    y_pos = y;
+                    x_pos = x;
                 }
             }  
         }
-        ext_vec[idx].x = kpt_vec[idx].x;
-        ext_vec[idx].y = (img.rows/CROP_PARAM)+dis[idx]+y_pos;
-        rectangle(img_cmp, Point(kpt_vec[idx].x-KERNEL_RADIUS,(img.rows/CROP_PARAM)+dis[idx]+y_pos-KERNEL_RADIUS), Point(kpt_vec[idx].x+KERNEL_RADIUS,(img.rows/CROP_PARAM)+dis[idx]+y_pos+KERNEL_RADIUS), Scalar(0,255,0 ), 1, 4);
-        line(img,kpt_vec[idx],Point(kpt_vec[idx].x,(img.rows/CROP_PARAM)+dis[idx]+y_pos),Scalar(0,0,255),1,8,0);
+        //rectangle(img_cmp, Point(kpt_vec[idx].x-KERNEL_RADIUS,(img.rows/CROP_PARAM)+dis[idx]+y_pos-KERNEL_RADIUS), Point(kpt_vec[idx].x+KERNEL_RADIUS,(img.rows/CROP_PARAM)+dis[idx]+y_pos+KERNEL_RADIUS), Scalar(0,255,0 ), 1, 4);
+        //imshow("ck_img",img_cmp);
+        
+        cout << kpt_vec[idx].x << " " << (kpt_vec[idx].x - SEARCH_LEN + x_pos + 1) << endl;
+        //cout << Point(x_pos-KERNEL_RADIUS, kpt_vec[idx].y-KERNEL_RADIUS) << endl;
+        rectangle(img_cmp, Point((kpt_vec[idx].x - SEARCH_LEN + x_pos + 1)-KERNEL_RADIUS, kpt_vec[idx].y-KERNEL_RADIUS), Point((kpt_vec[idx].x - SEARCH_LEN + x_pos + 1)+KERNEL_RADIUS, kpt_vec[idx].y+KERNEL_RADIUS), Scalar(0,255,0 ), 1, 4);
+        //waitKey(0);
     }
 
     //Free the allocated memory before    
@@ -266,7 +269,7 @@ int main(int argc, char*argv[])
         goodFeaturesToTrack(gray_img, corners, TMP_NUM, 0.01, 20.0, mask, 3, useHarrisDetector, 0.04);
         //imshow("L", img);
         //imshow("R", img_cmp);
-        waitKey(0);
+        //waitKey(0);
         if(corners.size() == 0)
         {
             cout << "bad frame" << endl;
@@ -281,8 +284,8 @@ int main(int argc, char*argv[])
             dis[temp_generate_idx] = 0;//gray_img.rows/CROP_PARAM-kpt.y;
 
             //boundary check for the images
-            if( kpt.x < KERNEL_RADIUS)  
-                kpt.x = KERNEL_RADIUS;
+            if( kpt.x < SEARCH_LEN)  
+                kpt.x = SEARCH_LEN;
             if( kpt.x > (img.cols-KERNEL_WIDTH) )
                 kpt.x = img.cols-KERNEL_WIDTH;
             if( kpt.y < KERNEL_RADIUS)
@@ -301,10 +304,10 @@ int main(int argc, char*argv[])
             waitKey(0);
             printf("%d:%d\n", temp_generate_idx,dis[temp_generate_idx]);
             */
-           
             //cropping the image and store
             //img_vec[temp_generate_idx] = gray_img(Rect(kpt.x-KERNEL_RADIUS,gray_img.rows/CROP_PARAM+dis[temp_generate_idx],KERNEL_WIDTH,gray_img.rows-(gray_img.rows/CROP_PARAM+dis[temp_generate_idx])));
-            img_vec[temp_generate_idx] = gray_img_cmp(Rect(0, kpt.y-KERNEL_RADIUS, gray_img_cmp.cols, KERNEL_WIDTH));
+            img_vec[temp_generate_idx] = gray_img_cmp(Rect(kpt.x-SEARCH_LEN, kpt.y-KERNEL_RADIUS, 2*SEARCH_LEN, KERNEL_WIDTH));
+            
             /*
             imshow("temp_img",img_vec[temp_generate_idx]);
             waitKey(0);
@@ -317,6 +320,7 @@ int main(int argc, char*argv[])
         //video.write(img);
         //line(img, Point(0,img.rows/CROP_PARAM), Point(img.cols,img.rows/CROP_PARAM), Scalar(110,220,0));
         imshow("L", img);
+        waitKey(1);
         imshow("R",img_cmp);
         waitKey(1);
     }
