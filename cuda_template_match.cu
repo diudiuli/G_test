@@ -8,6 +8,7 @@
 #include <vector>
 #include <unistd.h>
 #include <string>
+#include <ctime>
 #include <opencv2/opencv.hpp>
 #include <opencv2/features2d.hpp>
 #include </usr/local/cuda-8.0/include/cuda.h>
@@ -16,11 +17,11 @@
 
 
 
-#define KERNEL_WIDTH 31
+#define KERNEL_WIDTH 19
 #define KERNEL_RADIUS (KERNEL_WIDTH/2)
 #define TILE_WIDTH (33-KERNEL_WIDTH)
 #define BLK_SIZE (TILE_WIDTH+KERNEL_WIDTH-1)
-#define TMP_NUM 8
+#define TMP_NUM 4
 
 
 #define ACCURATE_MODE KERNEL_WIDTH
@@ -173,6 +174,7 @@ int cuda_tp_img(int template_num)
             }        
         }
     }
+    //clock_t begin = clock();
     //allocate memory in cuda global memory
     cudaMalloc( (void**)&device_img_input, img_size*sizeof(float)*template_num  );
     cudaMalloc( (void**)&device_img_output, img_size*sizeof(float)*template_num );
@@ -186,9 +188,11 @@ int cuda_tp_img(int template_num)
     //calling the convolution gpu function
     conv2d <<< DimGrid, Dimblock >>>( device_img_input, device_img_output, x_size, y_size, template_num);
     cudaDeviceSynchronize();
-    
     cudaMemcpy( gpu_out, device_img_output, img_size*sizeof(float)*template_num, cudaMemcpyDeviceToHost);
     //Selecting peak value of each image's convolution result and label out on the image.
+    //clock_t end = clock();
+    //double elapsed_secs = double(end - begin) / CLOCKS_PER_SEC;
+    //cout << "GPU:" << elapsed_secs << "s" << endl;
     float res = 0;
     int x_pos;
     for(int idx=0; idx<template_num; idx++)
@@ -207,13 +211,9 @@ int cuda_tp_img(int template_num)
                 }
             }  
         }
-        //rectangle(img_cmp, Point(kpt_vec[idx].x-KERNEL_RADIUS,(img.rows/CROP_PARAM)+dis[idx]+y_pos-KERNEL_RADIUS), Point(kpt_vec[idx].x+KERNEL_RADIUS,(img.rows/CROP_PARAM)+dis[idx]+y_pos+KERNEL_RADIUS), Scalar(0,255,0 ), 1, 4);
-        //imshow("ck_img",img_cmp);
-        
-        cout << kpt_vec[idx].x << " " << (kpt_vec[idx].x - SEARCH_LEN + x_pos + 1) << endl;
+        //cout << kpt_vec[idx].x << " " << (kpt_vec[idx].x - SEARCH_LEN + x_pos + 1) << endl;
         //cout << Point(x_pos-KERNEL_RADIUS, kpt_vec[idx].y-KERNEL_RADIUS) << endl;
         rectangle(img_cmp, Point((kpt_vec[idx].x - SEARCH_LEN + x_pos + 1)-KERNEL_RADIUS, kpt_vec[idx].y-KERNEL_RADIUS), Point((kpt_vec[idx].x - SEARCH_LEN + x_pos + 1)+KERNEL_RADIUS, kpt_vec[idx].y+KERNEL_RADIUS), Scalar(0,255,0 ), 1, 4);
-        //waitKey(0);
     }
 
     //Free the allocated memory before    
@@ -223,6 +223,47 @@ int cuda_tp_img(int template_num)
     free(host_templ);
     free(gpu_out);
     return 0;
+}
+/////////////////////////////////////////////////////////////////////////////////////
+/*
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ */
+///////////////////////////////////////////////////////////////////////////////////////
+int cpu_tp_img(int template_num)
+{
+	//clock_t begin_2 = clock();
+	for(int s=0; s< template_num; s++)
+	{
+		Mat result;
+		int result_cols = img_vec[s].cols - templs[s].cols + 1;
+		int result_rows = img_vec[s].rows - templs[s].rows + 1;
+		result.create( result_rows, result_cols, CV_32FC1 );
+
+		matchTemplate( img_vec[s], templs[s], result, CV_TM_CCOEFF_NORMED );
+
+		normalize( result, result, 0, 1, NORM_MINMAX, -1, Mat() );
+		double minVal; 
+		double maxVal; 
+		Point minLoc; 
+		Point maxLoc;
+  		Point matchLoc;
+		minMaxLoc( result, &minVal, &maxVal, &minLoc, &maxLoc, Mat() );
+		matchLoc = minLoc;
+		//rectangle( img_cmp, matchLoc, Point( matchLoc.x + templs[s].cols , matchLoc.y + templs[s].rows ), Scalar::all(0), 2, 8, 0 );
+  		rectangle(img_cmp, Point((kpt_vec[s].x - SEARCH_LEN + matchLoc.x + 1)-KERNEL_RADIUS, kpt_vec[s].y-KERNEL_RADIUS), Point((kpt_vec[s].x - SEARCH_LEN + matchLoc.x + 1)+KERNEL_RADIUS, kpt_vec[s].y+KERNEL_RADIUS), Scalar(0,255,0 ), 1, 4);
+  		
+	}
+	//clock_t end_2 = clock();
+    //double elapsed_secs_2 = double(end_2 - begin_2) / CLOCKS_PER_SEC;
+    //cout << "CPU:" << elapsed_secs_2 << "s" << endl;
+	//imshow("CPU_res", result);
+	return 0;
 }
 /////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char*argv[])
@@ -243,13 +284,13 @@ int main(int argc, char*argv[])
     while(fscanf(stdin, "%s", filename)!=EOF)
     {
         
-        cout << filename << endl;
+        //cout << filename << endl;
         template_num = TMP_NUM;
         img = imread(filename, -1);
         //Reading the Image to be compared
         if(fscanf(stdin, "%s", filename_comp)!=EOF)
         {
-            cout << filename_comp << endl;
+            //cout << filename_comp << endl;
             img_cmp = imread(filename_comp, -1);      
         }
 
@@ -267,9 +308,6 @@ int main(int argc, char*argv[])
         bool useHarrisDetector = false;
         
         goodFeaturesToTrack(gray_img, corners, TMP_NUM, 0.01, 20.0, mask, 3, useHarrisDetector, 0.04);
-        //imshow("L", img);
-        //imshow("R", img_cmp);
-        //waitKey(0);
         if(corners.size() == 0)
         {
             cout << "bad frame" << endl;
@@ -299,30 +337,32 @@ int main(int argc, char*argv[])
             //flip the template in order to find the reflections
             //flip(curr_tmpl,templs[temp_generate_idx],0);
 
-            /*
-            imshow("img", img);
-            waitKey(0);
-            printf("%d:%d\n", temp_generate_idx,dis[temp_generate_idx]);
-            */
             //cropping the image and store
             //img_vec[temp_generate_idx] = gray_img(Rect(kpt.x-KERNEL_RADIUS,gray_img.rows/CROP_PARAM+dis[temp_generate_idx],KERNEL_WIDTH,gray_img.rows-(gray_img.rows/CROP_PARAM+dis[temp_generate_idx])));
-            img_vec[temp_generate_idx] = gray_img_cmp(Rect(kpt.x-SEARCH_LEN, kpt.y-KERNEL_RADIUS, 2*SEARCH_LEN, KERNEL_WIDTH));
-            
-            /*
-            imshow("temp_img",img_vec[temp_generate_idx]);
-            waitKey(0);
-            */
+            img_vec[temp_generate_idx] = gray_img_cmp(Rect(kpt.x-SEARCH_LEN, kpt.y-KERNEL_RADIUS, (SEARCH_LEN+KERNEL_WIDTH), KERNEL_WIDTH));
             kpt_vec[temp_generate_idx] = kpt;
             
         }
-          
+
+        clock_t begin_GPU = clock();
         cuda_tp_img(template_num);
+        clock_t end_GPU = clock();
+    	double elapsed_secs_GPU = double(end_GPU - begin_GPU) / CLOCKS_PER_SEC;
+    	cout << "GPU:" << elapsed_secs_GPU << "s" << endl;
+		
+		/*
+    	clock_t begin_CPU = clock();
+        cpu_tp_img(template_num);
+        clock_t end_CPU = clock();
+    	double elapsed_secs_CPU = double(end_CPU - begin_CPU) / CLOCKS_PER_SEC;
+    	cout << "CPU:" << elapsed_secs_CPU << "s" << endl;
+		*/
         //video.write(img);
         //line(img, Point(0,img.rows/CROP_PARAM), Point(img.cols,img.rows/CROP_PARAM), Scalar(110,220,0));
         imshow("L", img);
         waitKey(1);
         imshow("R",img_cmp);
-        waitKey(1);
+        waitKey(0);
     }
 
 }
